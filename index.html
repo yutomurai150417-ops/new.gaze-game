@@ -208,8 +208,9 @@
       document.getElementById('btn-restart').onclick = () => location.reload();
     }
 
-    const mesh = new FaceMesh({locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`});
-    mesh.onResults(results => {
+    const mesh = new FaceMesh({
+  locateFile: f => `./${f}`
+});
       const now = performance.now();
       const dt = (now - lastFrameTime) / 1000;
       lastFrameTime = now;
