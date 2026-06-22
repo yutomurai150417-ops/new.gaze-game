@@ -5,7 +5,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>段階的視線探索ゲーム</title>
-  <link rel="manifest" href="manifest.json">
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
@@ -13,7 +12,6 @@
 </head>
 <body class="m-0 overflow-hidden font-sans w-screen h-screen text-white">
 
-  <!-- UIパネル -->
   <div id="ui-panel" class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 bg-white text-slate-900 p-8 rounded-3xl w-11/12 max-w-md shadow-2xl text-center">
     <h1 class="text-xl font-bold mb-4" id="ui-title">iPad 視線探索タスク</h1>
     <div id="input-fields" class="mb-4 text-left">
@@ -21,92 +19,61 @@
       <input type="text" id="case-id" placeholder="症例IDを入力" class="w-full border p-2 rounded mb-4">
       <label class="block text-sm font-bold mb-1">画像選択:</label>
       <input type="file" id="bg-upload" accept="image/*" multiple class="w-full text-sm">
-      <p class="text-xs text-slate-500 mt-2">画像を複数選択してください</p>
     </div>
-    <button id="btn-start" class="w-full bg-slate-600 py-4 rounded-xl text-white font-bold hover:bg-slate-700 cursor-pointer pointer-events-auto">タスクを開始</button>
+    <button id="btn-start" class="w-full bg-slate-600 py-4 rounded-xl text-white font-bold hover:bg-slate-700 cursor-pointer">タスクを開始</button>
     <div id="result-actions" class="hidden mt-4 space-y-2">
-        <button id="btn-download-csv" class="w-full bg-green-600 py-3 rounded-xl text-white font-bold hover:bg-green-700 cursor-pointer">CSVデータをダウンロード</button>
-        <button id="btn-download-video" class="w-full bg-blue-600 py-3 rounded-xl text-white font-bold hover:bg-blue-700 cursor-pointer">視線動画を保存</button>
+        <button id="btn-download-csv" class="w-full bg-green-600 py-3 rounded-xl text-white font-bold hover:bg-green-700 cursor-pointer">CSVダウンロード</button>
         <button id="btn-restart" class="w-full bg-slate-400 py-3 rounded-xl text-white font-bold hover:bg-slate-500 cursor-pointer">もう一度</button>
     </div>
   </div>
 
   <div id="status" class="absolute top-5 left-5 z-40 text-sm font-mono bg-black/50 p-2 rounded">準備中...</div>
-  <div id="score-display" class="absolute top-5 right-5 z-40 text-xl font-bold">スコア: 0</div>
-  <div id="timer-display" class="absolute bottom-5 right-5 z-40 text-xl font-bold">残り: 60秒</div>
-
   <canvas id="app-canvas" class="block w-full h-full"></canvas>
-  <canvas id="gaze-record-canvas" class="hidden"></canvas>
 
   <script>
+    // Service Worker 登録
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js').catch(err => console.error('SW registration failed:', err));
+        navigator.serviceWorker.register('./sw.js').catch(err => console.log(err));
       });
-    }
-
-    class GazeRecorder {
-      constructor(canvas) {
-        this.stream = canvas.captureStream(30);
-        this.recorder = new MediaRecorder(this.stream, { mimeType: 'video/webm' });
-        this.chunks = [];
-        this.recorder.ondataavailable = e => this.chunks.push(e.data);
-      }
-      start() { this.recorder.start(); }
-      stop() { this.recorder.stop(); }
-      getBlob() { return new Blob(this.chunks, { type: 'video/webm' }); }
     }
 
     const canvas = document.getElementById('app-canvas');
     const ctx = canvas.getContext('2d');
-    const recordCanvas = document.getElementById('gaze-record-canvas');
-    const recordCtx = recordCanvas.getContext('2d');
-    
-    let recorder = null, particles = [];
-    let gazeHistory = [];
-    let reactionLogs = []; 
-    let currentTargetSetTime = 0;
-    let dwellPoints = [];
-    
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    function playSound(freqs, duration) {
-        freqs.forEach((f, i) => {
-            const osc = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-            osc.frequency.value = f;
-            gain.gain.setValueAtTime(0.1, audioCtx.currentTime + i * 0.1);
-            gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration + i * 0.1);
-            osc.connect(gain); gain.connect(audioCtx.destination);
-            osc.start(audioCtx.currentTime + i * 0.1); osc.stop(audioCtx.currentTime + duration + i * 0.1);
-        });
-    }
-
-    let images = [], currentImg = null, level = 1, isRunning = false, isCalibrating = false, showingCongrats = false;
-    let gridRows = 1, gridCols = 3, revealed = new Set(), currentTarget = -1;
+    let mesh, camera, images = [], currentImg = null, level = 1, isRunning = false, revealed = new Set(), currentTarget = -1, score = 0;
     let cursor = { x: 0.5, y: 0.5 }, baseline = {x: 0, y: 0}, calibrationSamples = [];
-    let score = 0, startTime, recordStartTimestamp, timeLeft = 60, neonPulse = 0;
-    
-    let lookStartTime = 0, lastLookedIdx = -1;
-    let areaStats = Array.from({length: 9}, () => ({duration: 0}));
-    let lastFrameTime = performance.now();
 
-    function createConfetti() {
-        for(let i=0; i<100; i++) {
-            particles.push({
-                x: Math.random() * canvas.width, y: -10,
-                vx: (Math.random() - 0.5) * 10, vy: Math.random() * 5 + 2,
-                color: `hsl(${Math.random()*360}, 100%, 70%)`
-            });
+    // 初期化関数
+    const initMesh = () => {
+      mesh = new FaceMesh({ locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}` });
+      mesh.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+      mesh.onResults(results => {
+        if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+          const lm = results.multiFaceLandmarks[0];
+          const rawX = 1 - (lm[159].x + lm[386].x) / 2;
+          const rawY = (lm[159].y + lm[386].y) / 2;
+          cursor.x += ((0.5 + (rawX - baseline.x) * 20) - cursor.x) * 0.15;
+          cursor.y += ((0.5 + (rawY - baseline.y) * 20) - cursor.y) * 0.15;
         }
+      });
+    };
+
+    const resetTask = () => {
+      score = 0; level = 1; revealed.clear(); isRunning = true;
+      document.getElementById('ui-panel').style.display = 'none';
+      setupLevel();
+    };
+
+    function setupLevel() {
+      currentImg = images[Math.floor(Math.random() * images.length)];
+      currentTarget = Math.floor(Math.random() * 3);
     }
 
     document.getElementById('bg-upload').onchange = (e) => {
-      images = [];
       Array.from(e.target.files).forEach(file => {
         const reader = new FileReader();
         reader.onload = (ev) => {
           const img = new Image();
-          img.crossOrigin = "anonymous";
           img.src = ev.target.result;
           images.push(img);
         };
@@ -114,150 +81,36 @@
       });
     };
 
-    function setupLevel() {
-      if (images.length === 0) return;
-      currentImg = images[Math.floor(Math.random() * images.length)];
-      if(level === 1) { gridRows = 1; gridCols = 3; }
-      else if(level === 2) { gridRows = 3; gridCols = 1; }
-      else if(level === 3) { gridRows = 2; gridCols = 3; }
-      else { gridRows = 3; gridCols = 3; }
-      revealed.clear();
-      setNextTarget();
-      document.getElementById('status').innerText = `レベル: ${level}/4`;
-    }
-
-    function setNextTarget() {
-      let next;
-      do { next = Math.floor(Math.random() * (gridRows * gridCols)); } while (revealed.has(next));
-      currentTarget = next;
-      currentTargetSetTime = Date.now();
-      dwellPoints = [];
-    }
-
-    function downloadCSV() {
-        const caseID = document.getElementById('case-id').value || "Unknown";
-        let totalPathLength = 0;
-        for(let i=1; i<gazeHistory.length; i++) {
-            const dx = gazeHistory[i].x - gazeHistory[i-1].x;
-            const dy = gazeHistory[i].y - gazeHistory[i-1].y;
-            totalPathLength += Math.sqrt(dx*dx + dy*dy);
-        }
-        let csvContent = `CaseID,${caseID}\nTimestamp,${recordStartTimestamp}\n\nAreaID,Duration(sec)\n`;
-        areaStats.forEach((stat, idx) => { csvContent += `${idx},${stat.duration.toFixed(3)}\n`; });
-        csvContent += `\nTrialID,TargetID,ReactionTime(ms)\n`;
-        reactionLogs.forEach((log, i) => { csvContent += `${i+1},${log.targetId},${log.timeMs.toFixed(0)}\n`; });
-        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url; link.download = `gaze_data_${caseID}.csv`; link.click();
-    }
-
-    function downloadVideo() {
-        const caseID = document.getElementById('case-id').value || "Unknown";
-        const blob = recorder.getBlob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url; a.download = `gaze_track_${caseID}.webm`; a.click();
-    }
-
-    async function endGame() {
-      isRunning = false;
-      if (recorder) recorder.stop();
-      document.getElementById('ui-panel').style.display = 'block';
-      document.getElementById('input-fields').classList.add('hidden');
-      document.getElementById('btn-start').classList.add('hidden');
-      document.getElementById('result-actions').classList.remove('hidden');
-      document.getElementById('ui-title').innerHTML = `<div class="text-4xl">終了！</div><div class="mt-2 text-2xl font-bold">スコア: ${score}</div>`;
-      document.getElementById('btn-download-csv').onclick = downloadCSV;
-      document.getElementById('btn-download-video').onclick = downloadVideo;
-      document.getElementById('btn-restart').onclick = () => location.reload();
-    }
-
-    const mesh = new FaceMesh({
-      locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
-    });
-    mesh.setOptions({maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5});
-    mesh.onResults(results => {
-      const now = performance.now();
-      const dt = (now - lastFrameTime) / 1000;
-      lastFrameTime = now;
-      if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
-        const lm = results.multiFaceLandmarks[0];
-        const rawX = 1 - (lm[159].x + lm[386].x) / 2;
-        const rawY = (lm[159].y + lm[386].y) / 2;
-        if (isCalibrating) {
-            calibrationSamples.push({x: rawX, y: rawY});
-        } else if (isRunning && !showingCongrats) {
-            cursor.x += ((0.5 + (rawX - baseline.x) * 20) - cursor.x) * 0.15;
-            cursor.y += ((0.5 + (rawY - baseline.y) * 20) - cursor.y) * 0.15;
-            gazeHistory.push({x: cursor.x * recordCanvas.width, y: cursor.y * recordCanvas.height});
-            const idx = Math.floor(cursor.y * gridRows) * gridCols + Math.floor(cursor.x * gridCols);
-            if (idx === currentTarget) {
-                if (idx === lastLookedIdx) {
-                    if (Date.now() - lookStartTime >= 1000 && !revealed.has(idx)) {
-                        reactionLogs.push({targetId: currentTarget, timeMs: Date.now() - currentTargetSetTime});
-                        revealed.add(idx);
-                        score += 10;
-                        if (revealed.size >= (gridRows * gridCols)) {
-                            score += 50; showingCongrats = true;
-                            createConfetti();
-                            setTimeout(() => { level++; if (level > 4) endGame(); else { setupLevel(); showingCongrats = false; } }, 3000);
-                        } else { setNextTarget(); }
-                        document.getElementById('score-display').innerText = `スコア: ${score}`;
-                    }
-                } else { lookStartTime = Date.now(); lastLookedIdx = idx; }
-            } else { lookStartTime = Date.now(); lastLookedIdx = idx; }
-        }
-      }
-    });
-
-    function draw() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      neonPulse = (Math.sin(Date.now() / 200) + 1) / 2;
-      if (isRunning && currentImg && !showingCongrats) {
-          const cellW = canvas.width / gridCols, cellH = canvas.height / gridRows;
-          for(let i=0; i<gridRows*gridCols; i++) {
-            const dx = (i%gridCols)*cellW, dy = Math.floor(i/gridCols)*cellH;
-            if(revealed.has(i)) {
-              const sw = (currentImg.width/gridCols)/2, sh = (currentImg.height/gridRows)/2;
-              ctx.drawImage(currentImg, (i%gridCols)*(currentImg.width/gridCols), Math.floor(i/gridCols)*(currentImg.height/gridRows), currentImg.width/gridCols, currentImg.height/gridRows, dx, dy, cellW, cellH);
-            } else { ctx.fillStyle = "black"; ctx.fillRect(dx, dy, cellW, cellH); }
-            if(i === currentTarget) { ctx.strokeStyle = `rgba(255, 255, 255, ${0.4 + neonPulse * 0.6})`; ctx.lineWidth = 10; ctx.strokeRect(dx+5, dy+5, cellW-10, cellH-10); }
-          }
-          ctx.beginPath(); ctx.arc(cursor.x * canvas.width, cursor.y * canvas.height, 15, 0, Math.PI * 2);
-          ctx.strokeStyle = "red"; ctx.stroke();
-      } else if (showingCongrats) {
-          ctx.fillStyle = "white"; ctx.font = "bold 60px sans-serif"; ctx.textAlign = "center";
-          ctx.fillText("クリア！！", canvas.width/2, canvas.height/2);
-          particles.forEach((p, idx) => { p.x += p.vx; p.y += p.vy; ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, 10, 10); if(p.y > canvas.height) particles.splice(idx, 1); });
-      }
-      requestAnimationFrame(draw);
-    }
-
     document.getElementById('btn-start').onclick = async () => {
       if(images.length === 0) return alert("画像を選択してください");
-      document.getElementById('ui-panel').style.display = 'none';
-      recordCanvas.width = canvas.width; recordCanvas.height = canvas.height;
-      recorder = new GazeRecorder(recordCanvas); recorder.start();
+      initMesh();
+      const video = document.createElement('video');
       const stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: "user"}});
-      const video = document.createElement('video'); video.srcObject = stream;
+      video.srcObject = stream;
       await video.play();
-      const camera = new Camera(video, { onFrame: async () => await mesh.send({image: video}) });
+      camera = new Camera(video, { onFrame: async () => await mesh.send({image: video}) });
       await camera.start();
-      isCalibrating = true;
+      
       document.getElementById('status').innerText = "キャリブレーション中...";
       setTimeout(() => {
-        baseline = {x: calibrationSamples.reduce((a,b) => a+b.x,0)/calibrationSamples.length, y: calibrationSamples.reduce((a,b) => a+b.y,0)/calibrationSamples.length};
-        isCalibrating = false; isRunning = true; startTime = Date.now();
+        isRunning = true;
+        document.getElementById('ui-panel').style.display = 'none';
         setupLevel();
-        setInterval(() => {
-          timeLeft = Math.max(0, 60 - Math.floor((Date.now() - startTime)/1000));
-          document.getElementById('timer-display').innerText = `残り: ${timeLeft}秒`;
-          if (timeLeft === 0 && isRunning) endGame();
-        }, 1000);
       }, 3000);
     };
 
+    document.getElementById('btn-restart').onclick = resetTask;
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (isRunning && currentImg) {
+          ctx.drawImage(currentImg, 0, 0, canvas.width, canvas.height);
+          ctx.beginPath(); ctx.arc(cursor.x * canvas.width, cursor.y * canvas.height, 20, 0, Math.PI * 2);
+          ctx.strokeStyle = "red"; ctx.stroke();
+      }
+      requestAnimationFrame(draw);
+    }
+    
     window.onresize = () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; };
     canvas.width = window.innerWidth; canvas.height = window.innerHeight;
     draw();
