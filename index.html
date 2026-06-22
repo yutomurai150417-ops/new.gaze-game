@@ -1,13 +1,14 @@
+```html
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-  <link rel="manifest" href="manifest.json">
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>段階的視線探索ゲーム</title>
- 8  <script src="https://cdn.tailwindcss.com"></script>
-9  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-10 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+  <link rel="manifest" href="manifest.json">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
   <style>body { touch-action: none; background: #000; }</style>
 </head>
 <body class="m-0 overflow-hidden font-sans w-screen h-screen text-white">
@@ -38,6 +39,12 @@
   <canvas id="gaze-record-canvas" class="hidden"></canvas>
 
   <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch(err => console.error('SW registration failed:', err));
+      });
+    }
+
     class GazeRecorder {
       constructor(canvas) {
         this.stream = canvas.captureStream(30);
@@ -58,7 +65,6 @@
     let recorder = null, particles = [];
     let gazeHistory = [];
     let reactionLogs = []; 
-    let trialCounter = 0; // 試行ID管理用
     let currentTargetSetTime = 0;
     let dwellPoints = [];
     
@@ -124,62 +130,22 @@
       let next;
       do { next = Math.floor(Math.random() * (gridRows * gridCols)); } while (revealed.has(next));
       currentTarget = next;
-      trialCounter++; // ターゲットごとに試行IDをインクリメント
       currentTargetSetTime = Date.now();
       dwellPoints = [];
     }
 
     function downloadCSV() {
         const caseID = document.getElementById('case-id').value || "Unknown";
-        
         let totalPathLength = 0;
         for(let i=1; i<gazeHistory.length; i++) {
             const dx = gazeHistory[i].x - gazeHistory[i-1].x;
             const dy = gazeHistory[i].y - gazeHistory[i-1].y;
             totalPathLength += Math.sqrt(dx*dx + dy*dy);
         }
-
-        const diagonal = Math.sqrt(recordCanvas.width**2 + recordCanvas.height**2);
-        const normalizedPathLength = diagonal > 0 ? totalPathLength / diagonal : 0;
-
-        let dwellStability = 0;
-        if (dwellPoints.length > 5) {
-            const meanX = dwellPoints.reduce((a,b) => a+b.x,0)/dwellPoints.length;
-            const meanY = dwellPoints.reduce((a,b) => a+b.y,0)/dwellPoints.length;
-            const variance = dwellPoints.reduce((a,b) => a + Math.sqrt((b.x-meanX)**2 + (b.y-meanY)**2), 0) / dwellPoints.length;
-            dwellStability = 1 / (1 + variance);
-        }
-
-        const xs = gazeHistory.map(p => p.x), ys = gazeHistory.map(p => p.y);
-        const area = (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
-
         let csvContent = `CaseID,${caseID}\nTimestamp,${recordStartTimestamp}\n\nAreaID,Duration(sec)\n`;
         areaStats.forEach((stat, idx) => { csvContent += `${idx},${stat.duration.toFixed(3)}\n`; });
-        
-        // TrialIDごとの詳細ログを作成
         csvContent += `\nTrialID,TargetID,ReactionTime(ms)\n`;
-        reactionLogs.forEach((log, i) => {
-            csvContent += `${i+1},${log.targetId},${log.timeMs.toFixed(0)}\n`;
-        });
-
-        // 統計情報の集計
-        const groups = {};
-        reactionLogs.forEach(log => {
-            if (!groups[log.targetId]) groups[log.targetId] = [];
-            groups[log.targetId].push(log.timeMs);
-        });
-
-        csvContent += `\nTargetID,Entry_Count,MeanReactionTime(ms),MedianReactionTime(ms)\n`;
-        Object.keys(groups).sort((a,b) => a - b).forEach(id => {
-            const arr = groups[id].sort((a,b) => a - b);
-            const entryCount = arr.length;
-            const mean = arr.reduce((a,b) => a+b, 0) / arr.length;
-            const median = arr.length % 2 === 0 ? (arr[arr.length/2-1] + arr[arr.length/2])/2 : arr[Math.floor(arr.length/2)];
-            csvContent += `${id},${entryCount},${mean.toFixed(2)},${median.toFixed(2)}\n`;
-        });
-        
-        csvContent += `\nTotalPathLength(px),${totalPathLength.toFixed(2)}\nNormalized_PathLength,${normalizedPathLength.toFixed(4)}\nDwell_Stability,${dwellStability.toFixed(4)}\nTotalAreaApproximation,${area.toFixed(2)}\n`;
-
+        reactionLogs.forEach((log, i) => { csvContent += `${i+1},${log.targetId},${log.timeMs.toFixed(0)}\n`; });
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
@@ -197,20 +163,21 @@
     async function endGame() {
       isRunning = false;
       if (recorder) recorder.stop();
-      playSound([523, 659, 783, 1046, 1174, 1318], 0.3);
       document.getElementById('ui-panel').style.display = 'block';
       document.getElementById('input-fields').classList.add('hidden');
       document.getElementById('btn-start').classList.add('hidden');
       document.getElementById('result-actions').classList.remove('hidden');
-      document.getElementById('ui-title').innerHTML = `<div class="text-5xl">ゲーム終了！</div><div class="mt-4 text-3xl font-bold">スコア: ${score}</div>`;
+      document.getElementById('ui-title').innerHTML = `<div class="text-4xl">終了！</div><div class="mt-2 text-2xl font-bold">スコア: ${score}</div>`;
       document.getElementById('btn-download-csv').onclick = downloadCSV;
       document.getElementById('btn-download-video').onclick = downloadVideo;
       document.getElementById('btn-restart').onclick = () => location.reload();
     }
 
     const mesh = new FaceMesh({
-  locateFile: f => `./${f}`
-});
+      locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+    });
+    mesh.setOptions({maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5});
+    mesh.onResults(results => {
       const now = performance.now();
       const dt = (now - lastFrameTime) / 1000;
       lastFrameTime = now;
@@ -223,31 +190,18 @@
         } else if (isRunning && !showingCongrats) {
             cursor.x += ((0.5 + (rawX - baseline.x) * 20) - cursor.x) * 0.15;
             cursor.y += ((0.5 + (rawY - baseline.y) * 20) - cursor.y) * 0.15;
-            
             gazeHistory.push({x: cursor.x * recordCanvas.width, y: cursor.y * recordCanvas.height});
-            
-            const areaX = Math.min(2, Math.max(0, Math.floor(cursor.x * 3)));
-            const areaY = Math.min(2, Math.max(0, Math.floor(cursor.y * 3)));
-            const currentZoneIdx = areaY * 3 + areaX;
-            areaStats[currentZoneIdx].duration += dt;
-
             const idx = Math.floor(cursor.y * gridRows) * gridCols + Math.floor(cursor.x * gridCols);
             if (idx === currentTarget) {
-                dwellPoints.push({x: cursor.x, y: cursor.y});
                 if (idx === lastLookedIdx) {
                     if (Date.now() - lookStartTime >= 1000 && !revealed.has(idx)) {
                         reactionLogs.push({targetId: currentTarget, timeMs: Date.now() - currentTargetSetTime});
                         revealed.add(idx);
-                        playSound([660, 880], 0.2);
                         score += 10;
                         if (revealed.size >= (gridRows * gridCols)) {
                             score += 50; showingCongrats = true;
-                            playSound([523, 659, 783, 1046], 0.8);
                             createConfetti();
-                            setTimeout(() => { 
-                                level++; 
-                                if (level > 4) { endGame(); } else { setupLevel(); showingCongrats = false; }
-                            }, 3000);
+                            setTimeout(() => { level++; if (level > 4) endGame(); else { setupLevel(); showingCongrats = false; } }, 3000);
                         } else { setNextTarget(); }
                         document.getElementById('score-display').innerText = `スコア: ${score}`;
                     }
@@ -260,62 +214,38 @@
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       neonPulse = (Math.sin(Date.now() / 200) + 1) / 2;
-      
       if (isRunning && currentImg && !showingCongrats) {
           const cellW = canvas.width / gridCols, cellH = canvas.height / gridRows;
           for(let i=0; i<gridRows*gridCols; i++) {
             const dx = (i%gridCols)*cellW, dy = Math.floor(i/gridCols)*cellH;
             if(revealed.has(i)) {
-              const zoom = 2.0;
-              const sw = (currentImg.width/gridCols) / zoom;
-              const sh = (currentImg.height/gridRows) / zoom;
-              const sx = ((i%gridCols)*(currentImg.width/gridCols)) + ((currentImg.width/gridCols - sw)/2);
-              const sy = (Math.floor(i/gridCols)*(currentImg.height/gridRows)) + ((currentImg.height/gridRows - sh)/2);
-              ctx.drawImage(currentImg, sx, sy, sw, sh, dx, dy, cellW, cellH);
-            } else {
-              ctx.fillStyle = "black"; ctx.fillRect(dx, dy, cellW, cellH);
-            }
-            if(i === currentTarget) {
-              ctx.strokeStyle = `rgba(255, 255, 255, ${0.4 + neonPulse * 0.6})`;
-              ctx.lineWidth = 10; ctx.strokeRect(dx + 5, dy + 5, cellW - 10, cellH - 10);
-            }
+              const sw = (currentImg.width/gridCols)/2, sh = (currentImg.height/gridRows)/2;
+              ctx.drawImage(currentImg, (i%gridCols)*(currentImg.width/gridCols), Math.floor(i/gridCols)*(currentImg.height/gridRows), currentImg.width/gridCols, currentImg.height/gridRows, dx, dy, cellW, cellH);
+            } else { ctx.fillStyle = "black"; ctx.fillRect(dx, dy, cellW, cellH); }
+            if(i === currentTarget) { ctx.strokeStyle = `rgba(255, 255, 255, ${0.4 + neonPulse * 0.6})`; ctx.lineWidth = 10; ctx.strokeRect(dx+5, dy+5, cellW-10, cellH-10); }
           }
           ctx.beginPath(); ctx.arc(cursor.x * canvas.width, cursor.y * canvas.height, 15, 0, Math.PI * 2);
           ctx.strokeStyle = "red"; ctx.stroke();
       } else if (showingCongrats) {
-          ctx.drawImage(currentImg, 0, 0, canvas.width, canvas.height);
-          ctx.fillStyle = "white";
-          ctx.font = "bold 90px sans-serif";
-          ctx.textAlign = "center";
+          ctx.fillStyle = "white"; ctx.font = "bold 60px sans-serif"; ctx.textAlign = "center";
           ctx.fillText("クリア！！", canvas.width/2, canvas.height/2);
-          particles.forEach((p, idx) => {
-              p.x += p.vx; p.y += p.vy;
-              ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, 12, 12);
-              if(p.y > canvas.height) particles.splice(idx, 1);
-          });
+          particles.forEach((p, idx) => { p.x += p.vx; p.y += p.vy; ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, 10, 10); if(p.y > canvas.height) particles.splice(idx, 1); });
       }
       requestAnimationFrame(draw);
     }
 
     document.getElementById('btn-start').onclick = async () => {
-      if(images.length === 0) return alert("画像を先に選択してください");
-      audioCtx.resume();
-      recordStartTimestamp = new Date().toLocaleString();
+      if(images.length === 0) return alert("画像を選択してください");
       document.getElementById('ui-panel').style.display = 'none';
-      
-      recordCanvas.width = canvas.width;
-      recordCanvas.height = canvas.height;
-      recordCtx.fillStyle = "black";
-      recordCtx.fillRect(0, 0, recordCanvas.width, recordCanvas.height);
-      
-      recorder = new GazeRecorder(recordCanvas); 
-      recorder.start();
-      
+      recordCanvas.width = canvas.width; recordCanvas.height = canvas.height;
+      recorder = new GazeRecorder(recordCanvas); recorder.start();
       const stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: "user"}});
       const video = document.createElement('video'); video.srcObject = stream;
       await video.play();
-      await new Camera(video, { onFrame: async () => await mesh.send({image: video}) }).start();
+      const camera = new Camera(video, { onFrame: async () => await mesh.send({image: video}) });
+      await camera.start();
       isCalibrating = true;
+      document.getElementById('status').innerText = "キャリブレーション中...";
       setTimeout(() => {
         baseline = {x: calibrationSamples.reduce((a,b) => a+b.x,0)/calibrationSamples.length, y: calibrationSamples.reduce((a,b) => a+b.y,0)/calibrationSamples.length};
         isCalibrating = false; isRunning = true; startTime = Date.now();
@@ -332,12 +262,7 @@
     canvas.width = window.innerWidth; canvas.height = window.innerHeight;
     draw();
   </script>
-  <script>
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('sw.js');
-    });
-  }
-</script>
 </body>
 </html>
+
+```
