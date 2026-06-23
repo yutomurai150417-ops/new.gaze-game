@@ -224,8 +224,21 @@
       document.getElementById('ui-title').innerHTML = `<div class="text-5xl">ゲーム終了！</div><div class="mt-4 text-3xl font-bold">スコア: ${score}</div>`;
       document.getElementById('btn-download-csv').onclick = downloadCSV;
       document.getElementById('btn-download-video').onclick = downloadVideo;
-      document.getElementById('btn-restart').onclick = () => location.reload();
-    }
+    document.getElementById('btn-restart').onclick = () => {
+    // リセットしたい変数を初期化
+    score = 0;
+    level = 1;
+    isRunning = false;
+    revealed = new Set();
+    document.getElementById('score-display').innerText = "スコア: 0";
+    document.getElementById('timer-display').innerText = "残り: 60秒";
+    document.getElementById('result-actions').classList.add('hidden');
+    document.getElementById('input-fields').classList.remove('hidden');
+    document.getElementById('btn-start').classList.remove('hidden');
+    document.getElementById('ui-title').innerText = "iPad 視線探索タスク";
+    document.getElementById('ui-panel').style.display = 'block';
+};
+ 
 
     const mesh = new FaceMesh({locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`});
     mesh.onResults(results => {
